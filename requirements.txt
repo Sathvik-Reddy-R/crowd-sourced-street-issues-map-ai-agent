@@ -1,0 +1,10 @@
+Flask
+Flask-PyMongo
+flask-cors
+pymongo[srv]
+python-dotenv
+numpy
+opencv-python-headless
+scikit-learn
+gunicorn
+scikit-image
