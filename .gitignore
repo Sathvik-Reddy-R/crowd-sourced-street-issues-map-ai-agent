@@ -1,6 +1,13 @@
-.env
+venv/
 __pycache__/
 *.pyc
-dataset/
-static/uploads/
-
+*.pyo
+*.pyd
+.env
+instance/
+*.db
+*.sqlite
+uploads/
+.DS_Store
+.vscode/
+.idea/

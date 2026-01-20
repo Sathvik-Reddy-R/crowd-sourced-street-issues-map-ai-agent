@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Dashboard - Street Issues Reporter</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+        }
+
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .navbar h1 {
+            font-size: 24px;
+        }
+
+        .navbar-right {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .btn-light {
+            background: white;
+            color: #667eea;
+        }
+
+        .btn-light:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255,255,255,0.3);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            font-size: 32px;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .stat-card p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .content-section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .section-header h2 {
+            color: #333;
+            font-size: 22px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        #map {
+            width: 100%;
+            height: 500px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+
+        .reports-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .reports-table th,
+        .reports-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .reports-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-verified {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .status-in-progress {
+            background: #cce5ff;
+            color: #004085;
+        }
+
+        .status-resolved {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 30px;
+            border-radius: 12px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-header h2 {
+            color: #333;
+        }
+
+        .close-btn {
+            font-size: 28px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .no-reports {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1>🗺️ Street Issues - User Dashboard</h1>
+        <div class="navbar-right">
+            <span id="username"></span>
+            <a href="/logout" class="btn btn-light">Logout</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3 id="totalReports">0</h3>
+                <p>Total Reports</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="pendingReports">0</h3>
+                <p>Pending</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="resolvedReports">0</h3>
+                <p>Resolved</p>
+            </div>
+        </div>
+
+        <div class="content-section">
+            <div class="section-header">
+                <h2>Report New Issue</h2>
+            </div>
+            <div id="map"></div>
+            <button class="btn btn-primary" onclick="openReportModal()">📍 Report Issue at Selected Location</button>
+        </div>
+
+        <div class="content-section">
+            <div class="section-header">
+                <h2>My Reports</h2>
+            </div>
+            <div id="reportsContainer">
+                <div class="no-reports">Loading reports...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="reportModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Report Street Issue</h2>
+                <span class="close-btn" onclick="closeReportModal()">&times;</span>
+            </div>
+            <form id="reportForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label>Location</label>
+                    <input type="text" id="locationDisplay" readonly>
+                    <input type="hidden" id="latitude" name="latitude">
+                    <input type="hidden" id="longitude" name="longitude">
+                </div>
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" name="title" required>
+                </div>
+                <div class="form-group">
+                    <label>Issue Type</label>
+                    <select name="issue_type" required>
+                        <option value="pothole">Pothole</option>
+                        <option value="streetlight">Broken Streetlight</option>
+                        <option value="garbage">Garbage/Waste</option>
+                        <option value="drainage">Drainage Issue</option>
+                        <option value="road_damage">Road Damage</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Severity</label>
+                    <select name="severity" required>
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea name="description" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Upload Image (Optional)</label>
+                    <input type="file" name="image" accept="image/*">
+                </div>
+                <button type="submit" class="btn btn-primary">Submit Report</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        let map, marker;
+        let selectedLocation = null;
+
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([17.385, 78.486], 13);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            map.on('click', function(e) {
+                if (marker) {
+                    map.removeLayer(marker);
+                }
+                marker = L.marker(e.latlng).addTo(map);
+                selectedLocation = e.latlng;
+            });
+
+            loadReports();
+        }
+
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/user/stats');
+                const data = await response.json();
+                
+                document.getElementById('totalReports').textContent = data.total_reports;
+                document.getElementById('pendingReports').textContent = data.pending;
+                document.getElementById('resolvedReports').textContent = data.resolved;
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        async function loadReports() {
+            try {
+                const response = await fetch('/api/reports');
+                const reports = await response.json();
+
+                const container = document.getElementById('reportsContainer');
+                
+                if (reports.length === 0) {
+                    container.innerHTML = '<div class="no-reports">No reports yet. Click on the map to report your first issue!</div>';
+                    return;
+                }
+
+                let tableHTML = `
+                    <table class="reports-table">
+                        <thead>
+                            <tr>
+                                <th>Title</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+
+                reports.forEach(report => {
+                    const date = new Date(report.created_at).toLocaleDateString();
+                    tableHTML += `
+                        <tr>
+                            <td>${report.title}</td>
+                            <td>${report.issue_type}</td>
+                            <td><span class="status-badge status-${report.status}">${report.status}</span></td>
+                            <td>${date}</td>
+                        </tr>
+                    `;
+
+                    L.marker([report.latitude, report.longitude])
+                        .addTo(map)
+                        .bindPopup(`<b>${report.title}</b><br>${report.description}`);
+                });
+
+                tableHTML += '</tbody></table>';
+                container.innerHTML = tableHTML;
+
+                loadStats();
+            } catch (error) {
+                console.error('Error loading reports:', error);
+            }
+        }
+
+        function openReportModal() {
+            if (!selectedLocation) {
+                alert('Please select a location on the map first!');
+                return;
+            }
+
+            document.getElementById('latitude').value = selectedLocation.lat;
+            document.getElementById('longitude').value = selectedLocation.lng;
+            document.getElementById('locationDisplay').value = `${selectedLocation.lat.toFixed(6)}, ${selectedLocation.lng.toFixed(6)}`;
+            document.getElementById('reportModal').style.display = 'block';
+        }
+
+        function closeReportModal() {
+            document.getElementById('reportModal').style.display = 'none';
+            document.getElementById('reportForm').reset();
+        }
+
+        document.getElementById('reportForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const formData = new FormData(e.target);
+
+            try {
+                const response = await fetch('/api/reports', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('Report submitted successfully!');
+                    closeReportModal();
+                    loadReports();
+                    if (marker) {
+                        map.removeLayer(marker);
+                    }
+                    selectedLocation = null;
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (error) {
+                alert('An error occurred. Please try again.');
+            }
+        });
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('reportModal');
+            if (event.target === modal) {
+                closeReportModal();
+            }
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>

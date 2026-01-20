@@ -1,287 +1,250 @@
-from flask import Flask, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from models import db, User, StreetIssue
 from config import Config
-from models import mongo
-from datetime import datetime
 import os
 from werkzeug.utils import secure_filename
-from flask_cors import CORS
-from werkzeug.datastructures import FileStorage
-import pickle
-import cv2
-from skimage.feature import hog
-import numpy as np
+from functools import wraps
 
-# ============================
-#  LOAD MODEL
-# ============================
+app = Flask(__name__)
+app.config.from_object(Config)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "street_issue_model.pkl")
+# Initialize extensions
+db.init_app(app)
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
 
-try:
-    MODEL = pickle.load(open(MODEL_PATH, "rb"))
-    print("✅ ML Model loaded successfully")
-except Exception as e:
-    MODEL = None
-    print("❌ Model load failed:", e)
+# User loader for Flask-Login
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
+# Admin required decorator
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin:
+            flash('You need admin privileges to access this page.', 'danger')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
 
-# ============================
-#  CONSTANTS
-# ============================
+# Routes
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-BASE_UPLOAD_FOLDER = "static/uploads"
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+    
+    if request.method == 'POST':
+        data = request.get_json()
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        
+        # Check if user already exists
+        if User.query.filter_by(username=username).first():
+            return jsonify({'success': False, 'message': 'Username already exists'}), 400
+        
+        if User.query.filter_by(email=email).first():
+            return jsonify({'success': False, 'message': 'Email already exists'}), 400
+        
+        # Create new user
+        user = User(username=username, email=email)
+        user.set_password(password)
+        
+        db.session.add(user)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Registration successful! Please login.'}), 201
+    
+    return render_template('register.html')
 
-# Final authority mapping (Hyderabad-style)
-AUTHORITY_MAP = {
-    "Pothole": "GHMC",          # Roads & carriageway
-    "Garbage": "GHMC",          # Solid waste, roadside garbage
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+    
+    if request.method == 'POST':
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        user = User.query.filter_by(username=username).first()
+        
+        if user and user.check_password(password):
+            login_user(user)
+            
+            if user.is_admin:
+                return jsonify({'success': True, 'redirect': url_for('admin_dashboard')}), 200
+            else:
+                return jsonify({'success': True, 'redirect': url_for('user_dashboard')}), 200
+        
+        return jsonify({'success': False, 'message': 'Invalid username or password'}), 401
+    
+    return render_template('login.html')
 
-    "Streetlight": "TSSPDCL",   # Streetlights, poles, hanging wires
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    flash('You have been logged out successfully.', 'info')
+    return redirect(url_for('index'))
 
-    "Waterlogging": "HMWSSB",   # Water & sewerage / drainage issues
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    if current_user.is_admin:
+        return redirect(url_for('admin_dashboard'))
+    return redirect(url_for('user_dashboard'))
 
-    "Unsafe Area": "HYDRA",     # Public safety / hazard areas
+@app.route('/user/dashboard')
+@login_required
+def user_dashboard():
+    return render_template('user_dashboard.html')
 
-    "Other Urban Issue": "GHMC" # Fallback
-}
+@app.route('/admin/dashboard')
+@admin_required
+def admin_dashboard():
+    return render_template('admin_dashboard.html')
 
-
-# ============================
-#  AI ANALYSIS
-# ============================
-
-def analyze_image_unified(image_bytes: bytes) -> dict:
-    """
-    Run the ML model (HOG + SVM) on the uploaded image
-    and return issue type + severity + confidence.
-    """
-
-    if MODEL is None:
-        # Fallback in case model failed to load
-        return {
-            "issue_type_ai": "Other Urban Issue",
-            "ai_severity": "Low",
-            "confidence": 0.5
-        }
-
-    npimg = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-
-    if img is None:
-        # Fallback if decoding fails
-        return {
-            "issue_type_ai": "Other Urban Issue",
-            "ai_severity": "Low",
-            "confidence": 0.5
-        }
-
-    # Preprocess
-    img = cv2.resize(img, (128, 128))
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # HOG features
-    hog_features = hog(gray, pixels_per_cell=(16, 16), cells_per_block=(2, 2))
-    hog_features = hog_features.reshape(1, -1)
-
-    # Predict
-    prediction = MODEL.predict(hog_features)[0]      # e.g. "garbage", "pothole"
-    confidence = float(max(MODEL.predict_proba(hog_features)[0]))
-
-    # Severity based on confidence
-    if confidence > 0.8:
-        severity = "High"
-    elif confidence > 0.5:
-        severity = "Medium"
+# API Routes
+@app.route('/api/reports', methods=['GET'])
+@login_required
+def get_reports():
+    if current_user.is_admin:
+        # Admin can see all reports
+        reports = StreetIssue.query.all()
     else:
-        severity = "Low"
+        # Regular user can only see their own reports
+        reports = StreetIssue.query.filter_by(user_id=current_user.id).all()
+    
+    return jsonify([report.to_dict() for report in reports])
 
-    return {
-        # keep raw-ish label; we'll normalize later
-        "issue_type_ai": prediction.replace("_", " "),  # "unsafe_area" -> "unsafe area"
-        "ai_severity": severity,
-        "confidence": confidence
-    }
+@app.route('/api/reports/all', methods=['GET'])
+@admin_required
+def get_all_reports():
+    reports = StreetIssue.query.all()
+    return jsonify([report.to_dict() for report in reports])
 
-
-def calculate_priority_score_unified(ai_data, existing_reports_count):
-    """
-    Simple weighted priority score using:
-    - severity (High/Medium/Low)
-    - density (how many reports nearby)
-    - model confidence
-    """
-    severity_map = {"High": 1.0, "Medium": 0.6, "Low": 0.3}
-
-    sev = severity_map.get(ai_data["ai_severity"], 0.3)
-    dens = min(existing_reports_count / 5.0, 1.0)
-    conf = ai_data["confidence"]
-
-    score = (sev * 5) + (dens * 3) + (conf * 2)
-    return round(score, 2)
-
-
-# ============================
-#  SERIALIZER
-# ============================
-
-def serialize_report(report):
-    """
-    Convert MongoDB document into JSON for frontend.
-    """
-    report["_id"] = str(report["_id"])
-    lon, lat = report["location"]["coordinates"]
-
-    return {
-        "id": report["_id"],
-        "issue_type": report["issue_type"],
-        "description": report["description"],
-        "status": report["status"],
-        "priority_score": report["ai_priority_score"],
-        "target_authority": AUTHORITY_MAP.get(report["issue_type"], "GHMC"),
-        "image_url": f"/{report['image_path']}",
-        "location": {"lon": lon, "lat": lat},
-        "created_at": report["created_at"].isoformat()
-    }
-
-
-# ============================
-#  ROUTES
-# ============================
-
-def register_api_endpoints(app):
-
-    @app.route("/api/report", methods=["POST"])
-    def submit_report():
-
+@app.route('/api/reports', methods=['POST'])
+@login_required
+def create_report():
+    try:
         data = request.form
-        reports_collection = mongo.db.reports
-
-        if "image" not in request.files:
-            return jsonify({"error": "No image provided"}), 400
-
-        file: FileStorage = request.files["image"]
-
-        # --- READ IMAGE BYTES FOR AI ---
-        image_bytes = file.read()
-        file.stream.seek(0)
-
-        ai_data = analyze_image_unified(image_bytes)
-
-        # --- NORMALIZE AI LABEL & COMBINE WITH USER INPUT ---
-
-        # AI raw label (e.g. "garbage", "waterlogging", "unsafe area")
-        raw_label = ai_data["issue_type_ai"]
-        # Normalize to Title Case (e.g. "Garbage", "Waterlogging", "Unsafe Area")
-        normalized_ai = raw_label.strip().title()
-
-        # If user selected a type in dropdown, prefer that; else use AI label
-        user_issue = data.get("issue_type")
-        if user_issue:
-            issue_type_final = user_issue.strip()
-        else:
-            issue_type_final = normalized_ai
-
-        # Map to authority
-        target_authority = AUTHORITY_MAP.get(issue_type_final, "GHMC")
-
-        # Coordinates
-        try:
-            lon = float(data.get("longitude"))
-            lat = float(data.get("latitude"))
-        except Exception:
-            return jsonify({"error": "Invalid coordinates"}), 400
-
-        # Geo Query (50m radius)
-        RADIUS_IN_RADIANS = 50 / 6378137.0
-        geojson_location = {"type": "Point", "coordinates": [lon, lat]}
-
-        existing_reports = reports_collection.count_documents({
-            "location": {
-                "$geoWithin": {
-                    "$centerSphere": [[lon, lat], RADIUS_IN_RADIANS]
-                }
-            }
-        })
-
-        priority_score = calculate_priority_score_unified(ai_data, existing_reports)
-
-        # Save Image (locally for now)
-        authority_folder = os.path.join(BASE_UPLOAD_FOLDER, target_authority)
-        os.makedirs(authority_folder, exist_ok=True)
-
-        filename = secure_filename(
-            f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{file.filename}"
+        
+        # Handle file upload
+        image_path = None
+        if 'image' in request.files:
+            file = request.files['image']
+            if file and file.filename:
+                filename = secure_filename(file.filename)
+                # Create uploads directory if it doesn't exist
+                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+                image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(image_path)
+        
+        # Create new report
+        report = StreetIssue(
+            user_id=current_user.id,
+            title=data.get('title'),
+            description=data.get('description'),
+            latitude=float(data.get('latitude')),
+            longitude=float(data.get('longitude')),
+            issue_type=data.get('issue_type'),
+            severity=data.get('severity', 'medium'),
+            image_path=image_path
         )
-        image_path = os.path.join(authority_folder, filename)
-        file.save(image_path)
+        
+        db.session.add(report)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Report submitted successfully', 'report': report.to_dict()}), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
 
-        # Save to DB
-        doc = {
-            "issue_type": issue_type_final,  # Title case, matches AUTHORITY_MAP keys
-            "description": data.get("description", "No description provided."),
-            "image_path": image_path,
-            "location": geojson_location,
-            "ai_priority_score": priority_score,
-            "ai_severity": ai_data["ai_severity"],
-            "status": "AI Analyzed",
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
-        }
+@app.route('/api/reports/<int:report_id>', methods=['PUT'])
+@login_required
+def update_report(report_id):
+    report = StreetIssue.query.get_or_404(report_id)
+    
+    # Only admin or the report owner can update
+    if not current_user.is_admin and report.user_id != current_user.id:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    
+    data = request.get_json()
+    
+    if 'status' in data and current_user.is_admin:
+        report.status = data['status']
+    
+    if 'severity' in data and current_user.is_admin:
+        report.severity = data['severity']
+    
+    db.session.commit()
+    
+    return jsonify({'success': True, 'message': 'Report updated successfully', 'report': report.to_dict()})
 
-        result = reports_collection.insert_one(doc)
+@app.route('/api/reports/<int:report_id>', methods=['DELETE'])
+@login_required
+def delete_report(report_id):
+    report = StreetIssue.query.get_or_404(report_id)
+    
+    # Only admin or the report owner can delete
+    if not current_user.is_admin and report.user_id != current_user.id:
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    
+    db.session.delete(report)
+    db.session.commit()
+    
+    return jsonify({'success': True, 'message': 'Report deleted successfully'})
 
-        return jsonify({
-            "message": "Report submitted successfully.",
-            "report_id": str(result.inserted_id),
-            "ai_priority": priority_score,
-            "target_authority": target_authority
-        }), 201
+@app.route('/api/user/stats')
+@login_required
+def user_stats():
+    total_reports = StreetIssue.query.filter_by(user_id=current_user.id).count()
+    pending = StreetIssue.query.filter_by(user_id=current_user.id, status='pending').count()
+    resolved = StreetIssue.query.filter_by(user_id=current_user.id, status='resolved').count()
+    
+    return jsonify({
+        'total_reports': total_reports,
+        'pending': pending,
+        'resolved': resolved
+    })
 
-    @app.route("/api/reports", methods=["GET"])
-    def get_all_reports():
-        reports_collection = mongo.db.reports
+@app.route('/api/admin/stats')
+@admin_required
+def admin_stats():
+    total_reports = StreetIssue.query.count()
+    total_users = User.query.count()
+    pending = StreetIssue.query.filter_by(status='pending').count()
+    in_progress = StreetIssue.query.filter_by(status='in-progress').count()
+    resolved = StreetIssue.query.filter_by(status='resolved').count()
+    
+    return jsonify({
+        'total_reports': total_reports,
+        'total_users': total_users,
+        'pending': pending,
+        'in_progress': in_progress,
+        'resolved': resolved
+    })
 
-        authority_filter = request.args.get("authority")
-        status_filter = request.args.get("status")
-
-        query = {}
-
-        if authority_filter:
-            issues = [
-                issue for issue, auth in AUTHORITY_MAP.items()
-                if auth == authority_filter
-            ]
-            if issues:
-                query["issue_type"] = {"$in": issues}
-
-        if status_filter:
-            query["status"] = status_filter
-
-        cursor = reports_collection.find(query).sort("ai_priority_score", -1)
-        return jsonify([serialize_report(r) for r in cursor])
-
-
-# ============================
-#  APP FACTORY
-# ============================
-
-def create_app(config_dict=None):
-    app = Flask(__name__, static_url_path="/static", static_folder="static")
-
-    app.config.from_object(Config)
-    if config_dict:
-        app.config.update(config_dict)
-
-    CORS(app)
-    mongo.init_app(app)
-
-    register_api_endpoints(app)
-
+if __name__ == '__main__':
     with app.app_context():
-        try:
-            mongo.db.reports.create_index([("location", "2dsphere")])
-        except Exception:
-            pass
-
-    return app
+        db.create_all()
+        
+        # Create default admin user if not exists
+        admin = User.query.filter_by(username='admin').first()
+        if not admin:
+            admin = User(username='admin', email='admin@example.com', is_admin=True)
+            admin.set_password('admin123')
+            db.session.add(admin)
+            db.session.commit()
+            print("Default admin created - username: admin, password: admin123")
+    
+    app.run(debug=True)
